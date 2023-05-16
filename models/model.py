@@ -75,3 +75,10 @@ class Model(nn.Module):
             [apply_color(img_high[i, :, :, :], color[i, :, :]) ** gamma[i, :] for i in range(b)], dim=0)
         img_high = img_high.permute(0, 3, 1, 2)  # (B,H,W,C) -- (B,C,H,W)
         return img_high
+
+
+if __name__ == '__main__':
+    t = torch.randn(1, 3, 256, 256).cuda()
+    model = Model().cuda()
+    out = model(t)
+    print(out.shape)

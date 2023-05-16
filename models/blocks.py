@@ -1,6 +1,118 @@
 import torch
 import torch.nn as nn
 from timm.models.layers import trunc_normal_, DropPath
+import torch.nn.functional as F
+
+
+class ConvLayer(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, dilation=1, bias=True, groups=1, norm='in',
+                 nonlinear='relu'):
+        super(ConvLayer, self).__init__()
+        reflection_padding = (kernel_size + (dilation - 1) * (kernel_size - 1)) // 2
+        self.reflection_pad = nn.ReflectionPad2d(reflection_padding)
+        self.conv2d = nn.Conv2d(in_channels, out_channels, kernel_size, stride, groups=groups, bias=bias,
+                                dilation=dilation)
+        self.norm = norm
+        self.nonlinear = nonlinear
+
+        if norm == 'bn':
+            self.normalization = nn.BatchNorm2d(out_channels)
+        elif norm == 'in':
+            self.normalization = nn.InstanceNorm2d(out_channels, affine=False)
+        else:
+            self.normalization = None
+
+        if nonlinear == 'relu':
+            self.activation = nn.ReLU(inplace=True)
+        elif nonlinear == 'leakyrelu':
+            self.activation = nn.LeakyReLU(0.2)
+        elif nonlinear == 'PReLU':
+            self.activation = nn.PReLU()
+        else:
+            self.activation = None
+
+    def forward(self, x):
+        out = self.conv2d(self.reflection_pad(x))
+        if self.normalization is not None:
+            out = self.normalization(out)
+        if self.activation is not None:
+            out = self.activation(out)
+
+        return out
+
+
+class Aggreation(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3):
+        super(Aggreation, self).__init__()
+        self.attention = SelfAttention(in_channels, k=8, nonlinear='relu')
+        self.conv = ConvLayer(in_channels, out_channels, kernel_size=kernel_size, stride=1, dilation=1,
+                              nonlinear='leakyrelu',
+                              norm=None)
+
+    def forward(self, x):
+        return self.conv(self.attention(x))
+
+
+class SelfAttention(nn.Module):
+    def __init__(self, channels, k, nonlinear='relu'):
+        super(SelfAttention, self).__init__()
+        self.channels = channels
+        self.k = k
+        self.nonlinear = nonlinear
+
+        self.linear1 = nn.Linear(channels, channels // k)
+        self.linear2 = nn.Linear(channels // k, channels)
+        self.global_pooling = nn.AdaptiveAvgPool2d((1, 1))
+
+        if nonlinear == 'relu':
+            self.activation = nn.ReLU(inplace=True)
+        elif nonlinear == 'leakyrelu':
+            self.activation = nn.LeakyReLU(0.2)
+        elif nonlinear == 'PReLU':
+            self.activation = nn.PReLU()
+        else:
+            raise ValueError
+
+    def attention(self, x):
+        N, C, H, W = x.size()
+        out = torch.flatten(self.global_pooling(x), 1)
+        out = self.activation(self.linear1(out))
+        out = torch.sigmoid(self.linear2(out)).view(N, C, 1, 1)
+
+        return out.mul(x)
+
+    def forward(self, x):
+        return self.attention(x)
+
+
+class SPP(nn.Module):
+    def __init__(self, in_channels, out_channels, num_layers=4, interpolation_type='bilinear'):
+        super(SPP, self).__init__()
+        self.conv = nn.ModuleList()
+        self.num_layers = num_layers
+        self.interpolation_type = interpolation_type
+
+        for _ in range(self.num_layers):
+            self.conv.append(
+                ConvLayer(in_channels, in_channels, kernel_size=1, stride=1, dilation=1, nonlinear='leakyrelu',
+                          norm=None))
+
+        self.fusion = ConvLayer((in_channels * (self.num_layers + 1)), out_channels, kernel_size=3, stride=1,
+                                norm='False', nonlinear='leakyrelu')
+
+    def forward(self, x):
+
+        N, C, H, W = x.size()
+        out = []
+
+        for level in range(self.num_layers):
+            out.append(F.interpolate(self.conv[level](
+                F.avg_pool2d(x, kernel_size=2 * 2 ** (level + 1), stride=2 * 2 ** (level + 1),
+                             padding=2 * 2 ** (level + 1) % 2)), size=(H, W), mode=self.interpolation_type))
+
+        out.append(x)
+
+        return self.fusion(torch.cat(out, dim=1))
 
 
 # ResMLP's normalization
@@ -83,17 +195,41 @@ class CBlock_ln(nn.Module):
         self.pos_embed = nn.Conv2d(dim, dim, 3, padding=1, groups=dim)
         # self.norm1 = Aff_channel(dim)
         self.norm1 = norm_layer(dim)
+
+        self.block1_1 = ConvLayer(in_channels=dim, out_channels=dim, kernel_size=3, stride=1, dilation=2,
+                                  norm=None, nonlinear='leakyrelu')
+        self.block1_2 = ConvLayer(in_channels=dim, out_channels=dim, kernel_size=3, stride=1, dilation=4,
+                                  norm=None, nonlinear='leakyrelu')
+        self.aggreation1 = Aggreation(in_channels=dim * 4, out_channels=dim)
+
         self.conv1 = nn.Conv2d(dim, dim, 1)
         self.conv2 = nn.Conv2d(dim, dim, 1)
+
+        self.block2_1 = ConvLayer(in_channels=dim, out_channels=dim, kernel_size=3, stride=1, dilation=8,
+                                  norm=None, nonlinear='leakyrelu')
+        self.block2_2 = ConvLayer(in_channels=dim, out_channels=dim, kernel_size=3, stride=1, dilation=16,
+                                  norm=None, nonlinear='leakyrelu')
+        self.aggreation2 = Aggreation(in_channels=dim * 4, out_channels=dim)
+
         self.attn = nn.Conv2d(dim, dim, 5, padding=2, groups=dim)
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         # self.norm2 = Aff_channel(dim)
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
+
         self.gamma_1 = nn.Parameter(init_values * torch.ones((1, dim, 1, 1)), requires_grad=True)
         self.gamma_2 = nn.Parameter(init_values * torch.ones((1, dim, 1, 1)), requires_grad=True)
         self.mlp = CMlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+
+        self.block3_1 = ConvLayer(in_channels=dim, out_channels=dim, kernel_size=3, stride=1, dilation=32,
+                                  norm=None, nonlinear='leakyrelu')
+        self.block3_2 = ConvLayer(in_channels=dim, out_channels=dim, kernel_size=3, stride=1, dilation=64,
+                                  norm=None, nonlinear='leakyrelu')
+        self.aggreation3 = Aggreation(in_channels=dim * 4, out_channels=dim)
+
+        self.spp_img = SPP(in_channels=dim, out_channels=dim, num_layers=4, interpolation_type='bicubic')
+        self.block4_1 = nn.Conv2d(in_channels=dim, out_channels=dim, kernel_size=1, stride=1)
 
     def forward(self, x):
         x = x + self.pos_embed(x)
@@ -104,11 +240,29 @@ class CBlock_ln(nn.Module):
         norm_x = self.norm1(norm_x)
         norm_x = norm_x.view(B, H, W, C).permute(0, 3, 1, 2)
 
+        norm_x_1_1 = self.block1_1(norm_x)
+        norm_x_1_2 = self.block1_2(norm_x)
+        norm_x = self.aggreation1(torch.cat((x, norm_x, norm_x_1_1, norm_x_1_2), dim=1))
+
         x = x + self.drop_path(self.gamma_1 * self.conv2(self.attn(self.conv1(norm_x))))
+
+        x_2_1 = self.block2_1(x)
+        x_2_2 = self.block2_2(x)
+        x = self.aggreation2(torch.cat((norm_x, x, x_2_1, x_2_2), dim=1))
+
         norm_x = x.flatten(2).transpose(1, 2)
         norm_x = self.norm2(norm_x)
         norm_x = norm_x.view(B, H, W, C).permute(0, 3, 1, 2)
+
+        norm_x_3_1 = self.block3_1(norm_x)
+        norm_x_3_2 = self.block3_2(norm_x)
+        norm_x = self.aggreation3(torch.cat((norm_x, x, norm_x_3_1, norm_x_3_2), dim=1))
+
         x = x + self.drop_path(self.gamma_2 * self.mlp(norm_x))
+
+        x = self.spp_img(x)
+        x = self.block4_1(x)
+
         return x
 
 
