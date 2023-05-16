@@ -241,13 +241,13 @@ class CBlock_ln(nn.Module):
         norm_x = norm_x.view(B, H, W, C).permute(0, 3, 1, 2)
 
         norm_x_1_1 = self.block1_1(norm_x)
-        norm_x_1_2 = self.block1_2(norm_x)
+        norm_x_1_2 = self.block1_2(norm_x_1_1)
         norm_x = self.aggreation1(torch.cat((norm_x, norm_x_1_1, norm_x_1_2), dim=1))
 
         x = x + self.drop_path(self.gamma_1 * self.conv2(self.attn(self.conv1(norm_x))))
 
         x_2_1 = self.block2_1(x)
-        x_2_2 = self.block2_2(x)
+        x_2_2 = self.block2_2(x_2_1)
         x = self.aggreation2(torch.cat((x, x_2_1, x_2_2), dim=1))
 
         norm_x = x.flatten(2).transpose(1, 2)
@@ -255,7 +255,7 @@ class CBlock_ln(nn.Module):
         norm_x = norm_x.view(B, H, W, C).permute(0, 3, 1, 2)
 
         norm_x_3_1 = self.block3_1(norm_x)
-        norm_x_3_2 = self.block3_2(norm_x)
+        norm_x_3_2 = self.block3_2(norm_x_3_1)
         norm_x = self.aggreation3(torch.cat((norm_x, norm_x_3_1, norm_x_3_2), dim=1))
 
         x = x + self.drop_path(self.gamma_2 * self.mlp(norm_x))
