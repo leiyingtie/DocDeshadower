@@ -248,7 +248,7 @@ class CBlock_ln(nn.Module):
 
         x_2_1 = self.block2_1(x)
         x_2_2 = self.block2_2(x)
-        x = self.aggreation2(torch.cat((norm_x, x_2_1, x_2_2), dim=1))
+        x = self.aggreation2(torch.cat((x, x_2_1, x_2_2), dim=1))
 
         norm_x = x.flatten(2).transpose(1, 2)
         norm_x = self.norm2(norm_x)
