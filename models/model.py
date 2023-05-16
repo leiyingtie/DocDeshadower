@@ -66,4 +66,4 @@ class Model(nn.Module):
         img_high = torch.stack(
             [self.apply_color(img_high[i, :, :, :], color[i, :, :]) ** gamma[i, :] for i in range(b)], dim=0)
         img_high = img_high.permute(0, 3, 1, 2)  # (B,H,W,C) -- (B,C,H,W)
-        return mul, add, img_high
+        return img_high
