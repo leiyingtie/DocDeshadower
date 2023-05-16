@@ -4,7 +4,7 @@ import torch
 from timm.models.layers import trunc_normal_
 from torch import nn
 
-from models.blocks import CBlock_ln, Global_pred
+from models.blocks import CBlock_ln, Global_pred, DHAN
 
 
 # Short Cut Connection on Final Layer
@@ -16,13 +16,14 @@ class Local_pred_S(nn.Module):
         self.relu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
         # main blocks
         blocks1 = [CBlock_ln(16, drop_path=0.01), CBlock_ln(16, drop_path=0.05), CBlock_ln(16, drop_path=0.1)]
-        blocks2 = [CBlock_ln(16, drop_path=0.01), CBlock_ln(16, drop_path=0.05), CBlock_ln(16, drop_path=0.1)]
 
-        self.mul_blocks = nn.Sequential(*blocks1)
-        self.add_blocks = nn.Sequential(*blocks2)
+        self.branch1 = nn.Sequential(*blocks1)
+        self.branch2 = DHAN()
 
-        self.mul_end = nn.Sequential(nn.Conv2d(dim, 3, 3, 1, 1), nn.ReLU())
-        self.add_end = nn.Sequential(nn.Conv2d(dim, 3, 3, 1, 1), nn.Tanh())
+        self.branch1_end = nn.Sequential(nn.Conv2d(dim, 3, 3, 1, 1), nn.ReLU())
+
+        self.coefficient_1_0 = nn.Parameter(torch.ones((2, int(int(in_dim)))), requires_grad=True)
+
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -42,13 +43,16 @@ class Local_pred_S(nn.Module):
 
     def forward(self, img):
         img1 = self.relu(self.conv1(img))
-        # short cut connection
-        mul = self.mul_blocks(img1) + img1
-        add = self.add_blocks(img1) + img1
-        mul = self.mul_end(mul)
-        add = self.add_end(add)
 
-        return mul, add
+        # short cut connection
+        branch1 = self.branch1(img1)
+        branch2 = self.branch2(img)
+
+        branch1 = self.branch1_end(branch1)
+
+        out = self.coefficient_1_0[0, :][None, :, None, None] * branch1 + self.coefficient_1_0[1, :][None, :, None, None] * branch2
+
+        return out
 
 
 def apply_color(image, ccm):
@@ -66,11 +70,11 @@ class Model(nn.Module):
         self.global_net = Global_pred(in_channels=in_dim, type=type)
 
     def forward(self, inp):
-        mul, add = self.local_net(inp)
-        img_high = (inp.mul(mul)).add(add)
+        res = self.local_net(inp)
+
         gamma, color = self.global_net(inp)
-        b = img_high.shape[0]
-        img_high = img_high.permute(0, 2, 3, 1)  # (B,C,H,W) -- (B,H,W,C)
+        b = res.shape[0]
+        img_high = res.permute(0, 2, 3, 1)  # (B,C,H,W) -- (B,H,W,C)
         img_high = torch.stack(
             [apply_color(img_high[i, :, :, :], color[i, :, :]) ** gamma[i, :] for i in range(b)], dim=0)
         img_high = img_high.permute(0, 3, 1, 2)  # (B,H,W,C) -- (B,C,H,W)

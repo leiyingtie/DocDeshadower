@@ -46,8 +46,8 @@ class Aggreation(nn.Module):
         super(Aggreation, self).__init__()
         self.attention = SelfAttention(in_channels, k=8, nonlinear='relu')
         self.conv = ConvLayer(in_channels, out_channels, kernel_size=kernel_size, stride=1, dilation=1,
-                              nonlinear='leakyrelu',
-                              norm=None)
+                              nonlinear='PReLU',
+                              norm='in')
 
     def forward(self, x):
         return self.conv(self.attention(x))
@@ -94,11 +94,11 @@ class SPP(nn.Module):
 
         for _ in range(self.num_layers):
             self.conv.append(
-                ConvLayer(in_channels, in_channels, kernel_size=1, stride=1, dilation=1, nonlinear='leakyrelu',
+                ConvLayer(in_channels, in_channels, kernel_size=1, stride=1, dilation=1, nonlinear='PReLU',
                           norm=None))
 
         self.fusion = ConvLayer((in_channels * (self.num_layers + 1)), out_channels, kernel_size=3, stride=1,
-                                norm='False', nonlinear='leakyrelu')
+                                norm='False', nonlinear='PReLU')
 
     def forward(self, x):
 
@@ -195,41 +195,17 @@ class CBlock_ln(nn.Module):
         self.pos_embed = nn.Conv2d(dim, dim, 3, padding=1, groups=dim)
         # self.norm1 = Aff_channel(dim)
         self.norm1 = norm_layer(dim)
-
-        self.block1_1 = ConvLayer(in_channels=dim, out_channels=dim, kernel_size=3, stride=1, dilation=2,
-                                  norm=None, nonlinear='leakyrelu')
-        self.block1_2 = ConvLayer(in_channels=dim, out_channels=dim, kernel_size=3, stride=1, dilation=4,
-                                  norm=None, nonlinear='leakyrelu')
-        self.aggreation1 = Aggreation(in_channels=dim * 3, out_channels=dim)
-
         self.conv1 = nn.Conv2d(dim, dim, 1)
         self.conv2 = nn.Conv2d(dim, dim, 1)
-
-        self.block2_1 = ConvLayer(in_channels=dim, out_channels=dim, kernel_size=3, stride=1, dilation=8,
-                                  norm=None, nonlinear='leakyrelu')
-        self.block2_2 = ConvLayer(in_channels=dim, out_channels=dim, kernel_size=3, stride=1, dilation=16,
-                                  norm=None, nonlinear='leakyrelu')
-        self.aggreation2 = Aggreation(in_channels=dim * 3, out_channels=dim)
-
         self.attn = nn.Conv2d(dim, dim, 5, padding=2, groups=dim)
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         # self.norm2 = Aff_channel(dim)
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
-
         self.gamma_1 = nn.Parameter(init_values * torch.ones((1, dim, 1, 1)), requires_grad=True)
         self.gamma_2 = nn.Parameter(init_values * torch.ones((1, dim, 1, 1)), requires_grad=True)
         self.mlp = CMlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
-
-        self.block3_1 = ConvLayer(in_channels=dim, out_channels=dim, kernel_size=3, stride=1, dilation=32,
-                                  norm=None, nonlinear='leakyrelu')
-        self.block3_2 = ConvLayer(in_channels=dim, out_channels=dim, kernel_size=3, stride=1, dilation=64,
-                                  norm=None, nonlinear='leakyrelu')
-        self.aggreation3 = Aggreation(in_channels=dim * 3, out_channels=dim)
-
-        self.spp_img = SPP(in_channels=dim, out_channels=dim, num_layers=4, interpolation_type='bicubic')
-        self.block4_1 = nn.Conv2d(in_channels=dim, out_channels=dim, kernel_size=1, stride=1)
 
     def forward(self, x):
         x = x + self.pos_embed(x)
@@ -240,29 +216,11 @@ class CBlock_ln(nn.Module):
         norm_x = self.norm1(norm_x)
         norm_x = norm_x.view(B, H, W, C).permute(0, 3, 1, 2)
 
-        norm_x_1_1 = self.block1_1(norm_x)
-        norm_x_1_2 = self.block1_2(norm_x_1_1)
-        norm_x = self.aggreation1(torch.cat((norm_x, norm_x_1_1, norm_x_1_2), dim=1))
-
         x = x + self.drop_path(self.gamma_1 * self.conv2(self.attn(self.conv1(norm_x))))
-
-        x_2_1 = self.block2_1(x)
-        x_2_2 = self.block2_2(x_2_1)
-        x = self.aggreation2(torch.cat((x, x_2_1, x_2_2), dim=1))
-
         norm_x = x.flatten(2).transpose(1, 2)
         norm_x = self.norm2(norm_x)
         norm_x = norm_x.view(B, H, W, C).permute(0, 3, 1, 2)
-
-        norm_x_3_1 = self.block3_1(norm_x)
-        norm_x_3_2 = self.block3_2(norm_x_3_1)
-        norm_x = self.aggreation3(torch.cat((norm_x, norm_x_3_1, norm_x_3_2), dim=1))
-
         x = x + self.drop_path(self.gamma_2 * self.mlp(norm_x))
-
-        x = self.spp_img(x)
-        x = self.block4_1(x)
-
         return x
 
 
@@ -378,3 +336,125 @@ class Global_pred(nn.Module):
         # print(self.gamma_base, self.gamma_linear(gamma))
         color = self.color_linear(color).squeeze(-1).view(-1, 3, 3) + self.color_base
         return gamma, color
+
+
+class DHAN(nn.Module):
+    def __init__(self, channels=64):
+        super(DHAN, self).__init__()
+
+        self.fusion = ConvLayer(in_channels=3, out_channels=channels, kernel_size=1, stride=1, norm='in',
+                                nonlinear='PReLU')
+
+        # Stage0
+        self.block0_1 = ConvLayer(in_channels=channels, out_channels=channels, kernel_size=1, stride=1, norm='in',
+                                  nonlinear='PReLU')
+        self.block0_2 = ConvLayer(in_channels=channels, out_channels=channels, kernel_size=3, stride=1, norm='in',
+                                  nonlinear='PReLU')
+        # self.block0_2 = SplAtConv2d(in_channels = channels, channels = channels, kernel_size = (3,3), stride = (1,
+        # 1), padding = (1,1))
+
+        self.aggreation0_rgb = Aggreation(in_channels=channels * 2, out_channels=channels)
+        self.aggreation0_mas = Aggreation(in_channels=channels * 2, out_channels=channels)
+
+        # Stage1
+        self.block1_1 = ConvLayer(in_channels=channels, out_channels=channels, kernel_size=3, stride=1, dilation=2,
+                                  norm='in', nonlinear='PReLU')
+        self.block1_2 = ConvLayer(in_channels=channels, out_channels=channels, kernel_size=3, stride=1, dilation=4,
+                                  norm='in', nonlinear='PReLU')
+        # self.block1_2 = SplAtConv2d(in_channels = channels, channels = channels, kernel_size = (3,3), stride = (1,
+        # 1), padding = (4,4), dilation = (4,4))
+
+        self.aggreation1_rgb = Aggreation(in_channels=channels * 3, out_channels=channels)
+        self.aggreation1_mas = Aggreation(in_channels=channels * 3, out_channels=channels)
+
+        # Stage2
+        self.block2_1 = ConvLayer(in_channels=channels, out_channels=channels, kernel_size=3, stride=1, dilation=8,
+                                  norm='in', nonlinear='PReLU')
+        self.block2_2 = ConvLayer(in_channels=channels, out_channels=channels, kernel_size=3, stride=1, dilation=16,
+                                  norm='in', nonlinear='PReLU')
+        # self.block2_2 = SplAtConv2d(in_channels = channels, channels = channels, kernel_size = (3,3), stride = (1,
+        # 1), padding = (16,16), dilation = (16,16))
+
+        self.aggreation2_rgb = Aggreation(in_channels=channels * 3, out_channels=channels)
+        self.aggreation2_mas = Aggreation(in_channels=channels * 3, out_channels=channels)
+
+        # Stage3
+        self.block3_1 = ConvLayer(in_channels=channels, out_channels=channels, kernel_size=3, stride=1, dilation=32,
+                                  norm='in', nonlinear='PReLU')
+        self.block3_2 = ConvLayer(in_channels=channels, out_channels=channels, kernel_size=3, stride=1, dilation=64,
+                                  norm='in', nonlinear='PReLU')
+        # self.block3_2 = SplAtConv2d(in_channels = channels, channels = channels, kernel_size = (3,3), stride = (1,
+        # 1), padding = (64,64), dilation = (64,64))
+
+        self.aggreation3_rgb = Aggreation(in_channels=channels * 4, out_channels=channels)
+        self.aggreation3_mas = Aggreation(in_channels=channels * 4, out_channels=channels)
+
+        # Stage4
+        self.spp_img = SPP(in_channels=channels, out_channels=channels, num_layers=4, interpolation_type='bicubic')
+        self.spp_mas = SPP(in_channels=channels, out_channels=channels, num_layers=4, interpolation_type='bicubic')
+
+        self.block4_1 = nn.Conv2d(in_channels=channels, out_channels=4, kernel_size=1, stride=1)
+
+        self.dropout = nn.Dropout(0.1)
+
+    def forward(self, inp):
+
+        out = self.fusion(inp)
+
+        # Stage0
+        out0_1 = self.block0_1(out)
+        out0_2 = self.block0_2(out0_1)
+
+        agg0_rgb = self.aggreation0_rgb(torch.cat((out0_1, out0_2), dim=1))
+        agg0_mas = self.aggreation0_mas(torch.cat((out0_1, out0_2), dim=1))
+
+        out0_2 = agg0_rgb.mul(torch.sigmoid(agg0_mas))
+        out0_2 = self.dropout(out0_2)
+
+        # Stage1
+        out1_1 = self.block1_1(out0_2)
+        out1_2 = self.block1_2(out1_1)
+
+        agg1_rgb = self.aggreation1_rgb(torch.cat((agg0_rgb, out1_1, out1_2), dim=1))
+        agg1_mas = self.aggreation1_mas(torch.cat((agg0_mas, out1_1, out1_2), dim=1))
+
+        out1_2 = agg1_rgb.mul(torch.sigmoid(agg1_mas))
+        out1_2 = self.dropout(out1_2)
+
+        # Stage2
+        out2_1 = self.block2_1(out1_2)
+        out2_2 = self.block2_2(out2_1)
+
+        agg2_rgb = self.aggreation2_rgb(torch.cat((agg1_rgb, out2_1, out2_2), dim=1))
+        agg2_mas = self.aggreation2_mas(torch.cat((agg1_mas, out2_1, out2_2), dim=1))
+
+        out2_2 = agg2_rgb.mul(torch.sigmoid(agg2_mas))
+        out2_2 = self.dropout(out2_2)
+
+        # Stage3
+        out3_1 = self.block3_1(out2_2)
+        out3_2 = self.block3_2(out3_1)
+
+        agg3_rgb = self.aggreation3_rgb(torch.cat((agg1_rgb, agg2_rgb, out3_1, out3_2), dim=1))
+        agg3_mas = self.aggreation3_mas(torch.cat((agg1_rgb, agg2_rgb, out3_1, out3_2), dim=1))
+
+        # Stage4
+        spp_rgb = self.spp_img(agg3_rgb)
+        spp_mas = self.spp_mas(agg3_mas)
+
+        spp_rgb = spp_rgb.mul(torch.sigmoid(spp_mas))
+
+        out_rgb = (self.block4_1(spp_rgb))
+
+        alpha = torch.sigmoid(out_rgb[:, -1, :, :].unsqueeze(1))
+
+        out_rgb = inp.mul(alpha).add(out_rgb[:, :-1, :, :].mul(1 - alpha)).clamp(0, 1)
+
+        return out_rgb
+
+
+if __name__ == '__main__':
+    model = DHAN().cuda()
+    t = torch.randn(1, 3, 256, 256).cuda()
+    out1 = model(t)
+    print(out1.shape)
