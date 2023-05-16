@@ -5,6 +5,7 @@ from timm.models.layers import trunc_normal_
 from torch import nn
 
 from models.blocks import CBlock_ln, Global_pred, DHAN
+import torch.nn.functional as F
 
 
 # Short Cut Connection on Final Layer
@@ -46,11 +47,13 @@ class Local_pred_S(nn.Module):
 
         # short cut connection
         branch1 = self.branch1(img1)
+
         branch2 = self.branch2(img)
 
         branch1 = self.branch1_end(branch1)
 
-        out = self.coefficient_1_0[0, :][None, :, None, None] * branch1 + self.coefficient_1_0[1, :][None, :, None, None] * branch2
+        out = self.coefficient_1_0[0, :][None, :, None, None] * branch1 + self.coefficient_1_0[1, :][None, :, None,
+                                                                          None] * branch2
 
         return out
 
@@ -63,26 +66,41 @@ def apply_color(image, ccm):
     return torch.clamp(image, 1e-8, 1.0)
 
 
+def laplacian_pyramid_decomposition(img, depth):
+    current = img
+    pyramid = []
+    for i in range(depth):
+        blurred = F.interpolate(current, scale_factor=0.5, mode='bilinear', align_corners=False)
+        expanded = F.interpolate(blurred, current.shape[2:], mode='bilinear', align_corners=False)
+        residual = current - expanded
+        pyramid.append(residual)
+        current = blurred
+    pyramid.append(current)
+    return pyramid
+
+
+def laplacian_pyramid_reconstruction(pyramid):
+    current = pyramid[-1]
+    for i in reversed(range(len(pyramid) - 1)):
+        expanded = F.interpolate(current, pyramid[i].shape[2:], mode='bilinear', align_corners=False)
+        current = expanded + pyramid[i]
+    return current
+
+
 class Model(nn.Module):
     def __init__(self, in_dim=3):
         super(Model, self).__init__()
         self.local_net = Local_pred_S(in_dim=in_dim)
-        self.global_net = Global_pred(in_channels=in_dim, type=type)
 
     def forward(self, inp):
-        res = self.local_net(inp)
-
-        gamma, color = self.global_net(inp)
-        b = res.shape[0]
-        img_high = res.permute(0, 2, 3, 1)  # (B,C,H,W) -- (B,H,W,C)
-        img_high = torch.stack(
-            [apply_color(img_high[i, :, :, :], color[i, :, :]) ** gamma[i, :] for i in range(b)], dim=0)
-        img_high = img_high.permute(0, 3, 1, 2)  # (B,H,W,C) -- (B,C,H,W)
-        return img_high
+        inps = laplacian_pyramid_decomposition(inp, 2)
+        inps[-1] = self.local_net(inps[-1])
+        res = laplacian_pyramid_reconstruction(inps)
+        return res
 
 
 if __name__ == '__main__':
-    t = torch.randn(1, 3, 256, 256).cuda()
+    t = torch.randn(1, 3, 512, 512).cuda()
     model = Model().cuda()
     out = model(t)
     print(out.shape)

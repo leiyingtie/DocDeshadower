@@ -339,7 +339,7 @@ class Global_pred(nn.Module):
 
 
 class DHAN(nn.Module):
-    def __init__(self, channels=64):
+    def __init__(self, channels=16):
         super(DHAN, self).__init__()
 
         self.fusion = ConvLayer(in_channels=3, out_channels=channels, kernel_size=1, stride=1, norm='in',
@@ -409,7 +409,7 @@ class DHAN(nn.Module):
         agg0_mas = self.aggreation0_mas(torch.cat((out0_1, out0_2), dim=1))
 
         out0_2 = agg0_rgb.mul(torch.sigmoid(agg0_mas))
-        out0_2 = self.dropout(out0_2)
+        # out0_2 = self.dropout(out0_2)
 
         # Stage1
         out1_1 = self.block1_1(out0_2)
@@ -419,7 +419,7 @@ class DHAN(nn.Module):
         agg1_mas = self.aggreation1_mas(torch.cat((agg0_mas, out1_1, out1_2), dim=1))
 
         out1_2 = agg1_rgb.mul(torch.sigmoid(agg1_mas))
-        out1_2 = self.dropout(out1_2)
+        # out1_2 = self.dropout(out1_2)
 
         # Stage2
         out2_1 = self.block2_1(out1_2)
@@ -429,7 +429,7 @@ class DHAN(nn.Module):
         agg2_mas = self.aggreation2_mas(torch.cat((agg1_mas, out2_1, out2_2), dim=1))
 
         out2_2 = agg2_rgb.mul(torch.sigmoid(agg2_mas))
-        out2_2 = self.dropout(out2_2)
+        # out2_2 = self.dropout(out2_2)
 
         # Stage3
         out3_1 = self.block3_1(out2_2)
