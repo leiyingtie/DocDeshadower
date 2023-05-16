@@ -200,7 +200,7 @@ class CBlock_ln(nn.Module):
                                   norm=None, nonlinear='leakyrelu')
         self.block1_2 = ConvLayer(in_channels=dim, out_channels=dim, kernel_size=3, stride=1, dilation=4,
                                   norm=None, nonlinear='leakyrelu')
-        self.aggreation1 = Aggreation(in_channels=dim * 4, out_channels=dim)
+        self.aggreation1 = Aggreation(in_channels=dim * 3, out_channels=dim)
 
         self.conv1 = nn.Conv2d(dim, dim, 1)
         self.conv2 = nn.Conv2d(dim, dim, 1)
@@ -209,7 +209,7 @@ class CBlock_ln(nn.Module):
                                   norm=None, nonlinear='leakyrelu')
         self.block2_2 = ConvLayer(in_channels=dim, out_channels=dim, kernel_size=3, stride=1, dilation=16,
                                   norm=None, nonlinear='leakyrelu')
-        self.aggreation2 = Aggreation(in_channels=dim * 4, out_channels=dim)
+        self.aggreation2 = Aggreation(in_channels=dim * 3, out_channels=dim)
 
         self.attn = nn.Conv2d(dim, dim, 5, padding=2, groups=dim)
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
@@ -226,7 +226,7 @@ class CBlock_ln(nn.Module):
                                   norm=None, nonlinear='leakyrelu')
         self.block3_2 = ConvLayer(in_channels=dim, out_channels=dim, kernel_size=3, stride=1, dilation=64,
                                   norm=None, nonlinear='leakyrelu')
-        self.aggreation3 = Aggreation(in_channels=dim * 4, out_channels=dim)
+        self.aggreation3 = Aggreation(in_channels=dim * 3, out_channels=dim)
 
         self.spp_img = SPP(in_channels=dim, out_channels=dim, num_layers=4, interpolation_type='bicubic')
         self.block4_1 = nn.Conv2d(in_channels=dim, out_channels=dim, kernel_size=1, stride=1)
@@ -242,13 +242,13 @@ class CBlock_ln(nn.Module):
 
         norm_x_1_1 = self.block1_1(norm_x)
         norm_x_1_2 = self.block1_2(norm_x)
-        norm_x = self.aggreation1(torch.cat((x, norm_x, norm_x_1_1, norm_x_1_2), dim=1))
+        norm_x = self.aggreation1(torch.cat((norm_x, norm_x_1_1, norm_x_1_2), dim=1))
 
         x = x + self.drop_path(self.gamma_1 * self.conv2(self.attn(self.conv1(norm_x))))
 
         x_2_1 = self.block2_1(x)
         x_2_2 = self.block2_2(x)
-        x = self.aggreation2(torch.cat((norm_x, x, x_2_1, x_2_2), dim=1))
+        x = self.aggreation2(torch.cat((norm_x, x_2_1, x_2_2), dim=1))
 
         norm_x = x.flatten(2).transpose(1, 2)
         norm_x = self.norm2(norm_x)
@@ -256,7 +256,7 @@ class CBlock_ln(nn.Module):
 
         norm_x_3_1 = self.block3_1(norm_x)
         norm_x_3_2 = self.block3_2(norm_x)
-        norm_x = self.aggreation3(torch.cat((norm_x, x, norm_x_3_1, norm_x_3_2), dim=1))
+        norm_x = self.aggreation3(torch.cat((norm_x, norm_x_3_1, norm_x_3_2), dim=1))
 
         x = x + self.drop_path(self.gamma_2 * self.mlp(norm_x))
 
