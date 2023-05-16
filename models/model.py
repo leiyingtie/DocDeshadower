@@ -1,67 +1,69 @@
+import math
+
 import torch
-import torch.nn as nn
-import torchvision.transforms.functional as TF
+from timm.models.layers import trunc_normal_
+from torch import nn
 
-class DoubleConv(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(DoubleConv, self).__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 3, 1, 1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, 3, 1, 1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-        )
+from models.blocks import CBlock_ln, Global_pred
 
-    def forward(self, x):
-        return self.conv(x)
+
+# Short Cut Connection on Final Layer
+class Local_pred_S(nn.Module):
+    def __init__(self, in_dim=3, dim=16):
+        super(Local_pred_S, self).__init__()
+        # initial convolution
+        self.conv1 = nn.Conv2d(in_dim, dim, 3, padding=1, groups=1)
+        self.relu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
+        # main blocks
+        blocks1 = [CBlock_ln(16, drop_path=0.01), CBlock_ln(16, drop_path=0.05), CBlock_ln(16, drop_path=0.1)]
+        blocks2 = [CBlock_ln(16, drop_path=0.01), CBlock_ln(16, drop_path=0.05), CBlock_ln(16, drop_path=0.1)]
+
+        self.mul_blocks = nn.Sequential(*blocks1)
+        self.add_blocks = nn.Sequential(*blocks2)
+
+        self.mul_end = nn.Sequential(nn.Conv2d(dim, 3, 3, 1, 1), nn.ReLU())
+        self.add_end = nn.Sequential(nn.Conv2d(dim, 3, 3, 1, 1), nn.Tanh())
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.Conv2d):
+            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+            fan_out //= m.groups
+            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
+            if m.bias is not None:
+                m.bias.data.zero_()
+
+    def forward(self, img):
+        img1 = self.relu(self.conv1(img))
+        # short cut connection
+        mul = self.mul_blocks(img1) + img1
+        add = self.add_blocks(img1) + img1
+        mul = self.mul_end(mul)
+        add = self.add_end(add)
+
+        return mul, add
+
 
 class Model(nn.Module):
-    def __init__(
-            self, in_channels=3, out_channels=3, features=[64, 128, 256, 512],
-    ):
+    def __init__(self, in_dim=3):
         super(Model, self).__init__()
-        self.ups = nn.ModuleList()
-        self.downs = nn.ModuleList()
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.local_net = Local_pred_S(in_dim=in_dim)
+        self.global_net = Global_pred(in_channels=in_dim, type=type)
 
-        # Down part of UNET
-        for feature in features:
-            self.downs.append(DoubleConv(in_channels, feature))
-            in_channels = feature
-
-        # Up part of UNET
-        for feature in reversed(features):
-            self.ups.append(
-                nn.ConvTranspose2d(
-                    feature*2, feature, kernel_size=2, stride=2,
-                )
-            )
-            self.ups.append(DoubleConv(feature*2, feature))
-
-        self.bottleneck = DoubleConv(features[-1], features[-1]*2)
-        self.final_conv = nn.Conv2d(features[0], out_channels, kernel_size=1)
-
-    def forward(self, x):
-        skip_connections = []
-
-        for down in self.downs:
-            x = down(x)
-            skip_connections.append(x)
-            x = self.pool(x)
-
-        x = self.bottleneck(x)
-        skip_connections = skip_connections[::-1]
-
-        for idx in range(0, len(self.ups), 2):
-            x = self.ups[idx](x)
-            skip_connection = skip_connections[idx//2]
-
-            if x.shape != skip_connection.shape:
-                x = TF.resize(x, size=skip_connection.shape[2:])
-
-            concat_skip = torch.cat((skip_connection, x), dim=1)
-            x = self.ups[idx+1](concat_skip)
-
-        return self.final_conv(x)
+    def forward(self, inp):
+        mul, add = self.local_net(inp)
+        img_high = (inp.mul(mul)).add(add)
+        gamma, color = self.global_net(inp)
+        b = img_high.shape[0]
+        img_high = img_high.permute(0, 2, 3, 1)  # (B,C,H,W) -- (B,H,W,C)
+        img_high = torch.stack(
+            [self.apply_color(img_high[i, :, :, :], color[i, :, :]) ** gamma[i, :] for i in range(b)], dim=0)
+        img_high = img_high.permute(0, 3, 1, 2)  # (B,H,W,C) -- (B,C,H,W)
+        return mul, add, img_high
