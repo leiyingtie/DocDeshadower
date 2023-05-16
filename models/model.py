@@ -51,6 +51,14 @@ class Local_pred_S(nn.Module):
         return mul, add
 
 
+def apply_color(image, ccm):
+    shape = image.shape
+    image = image.view(-1, 3)
+    image = torch.tensordot(image, ccm, dims=[[-1], [-1]])
+    image = image.view(shape)
+    return torch.clamp(image, 1e-8, 1.0)
+
+
 class Model(nn.Module):
     def __init__(self, in_dim=3):
         super(Model, self).__init__()
@@ -64,6 +72,6 @@ class Model(nn.Module):
         b = img_high.shape[0]
         img_high = img_high.permute(0, 2, 3, 1)  # (B,C,H,W) -- (B,H,W,C)
         img_high = torch.stack(
-            [self.apply_color(img_high[i, :, :, :], color[i, :, :]) ** gamma[i, :] for i in range(b)], dim=0)
+            [apply_color(img_high[i, :, :, :], color[i, :, :]) ** gamma[i, :] for i in range(b)], dim=0)
         img_high = img_high.permute(0, 3, 1, 2)  # (B,H,W,C) -- (B,C,H,W)
         return img_high
