@@ -16,8 +16,8 @@ class Model(nn.Module):
         current = img
         pyramid = []
         for i in range(self.depth):
-            blurred = F.interpolate(current, scale_factor=0.5, mode='bilinear', align_corners=False)
-            expanded = F.interpolate(blurred, current.shape[2:], mode='bilinear', align_corners=False)
+            blurred = F.interpolate(current, scale_factor=0.5, mode='bicubic', align_corners=True)
+            expanded = F.interpolate(blurred, current.shape[2:], mode='bicubic', align_corners=True)
             residual = current - expanded
             pyramid.append(residual)
             current = blurred
@@ -27,7 +27,7 @@ class Model(nn.Module):
     def laplacian_pyramid_reconstruction(self, pyramid):
         current = pyramid[-1]
         for i in reversed(range(self.depth)):
-            expanded = F.interpolate(current, pyramid[i].shape[2:], mode='bilinear', align_corners=False)
+            expanded = F.interpolate(current, pyramid[i].shape[2:], mode='bicubic', align_corners=True)
             pyramid[i] = self.global_net[i](pyramid[i])
             current = expanded + pyramid[i]
         return current
