@@ -10,7 +10,6 @@ class Model(nn.Module):
         super(Model, self).__init__()
         self.depth = depth
         self.local_net = LocalNet(in_dim=in_dim)
-        self.global_net = nn.ModuleList([GlobalNet() for _ in range(self.depth)])
 
     def laplacian_pyramid_decomposition(self, img):
         current = img
@@ -28,7 +27,6 @@ class Model(nn.Module):
         current = pyramid[-1]
         for i in reversed(range(self.depth)):
             expanded = F.interpolate(current, pyramid[i].shape[2:], mode='bicubic', align_corners=True)
-            pyramid[i] = self.global_net[i](pyramid[i])
             current = expanded + pyramid[i]
         return current
 
