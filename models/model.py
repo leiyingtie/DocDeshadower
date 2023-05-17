@@ -28,8 +28,8 @@ class Model(nn.Module):
         current = pyramid[-1]
         for i in reversed(range(self.depth)):
             expanded = F.interpolate(current, pyramid[i].shape[2:], mode='bilinear', align_corners=False)
+            pyramid[i] = self.global_net[i](pyramid[i])
             current = expanded + pyramid[i]
-            current = self.global_net[i](current)
         return current
 
     def forward(self, inp):
