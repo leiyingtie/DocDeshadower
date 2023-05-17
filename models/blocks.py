@@ -4,6 +4,7 @@ from timm.models.layers import trunc_normal_, DropPath
 import torch.nn.functional as F
 import einops
 import numbers
+import math
 
 
 class ConvLayer(nn.Module):
@@ -298,46 +299,6 @@ class conv_embedding(nn.Module):
     def forward(self, x):
         x = self.proj(x)
         return x
-
-
-class Global_pred(nn.Module):
-    def __init__(self, in_channels=3, out_channels=64, num_heads=4, type='exp'):
-        super(Global_pred, self).__init__()
-        if type == 'exp':
-            self.gamma_base = nn.Parameter(torch.ones((1)), requires_grad=False)  # False in exposure correction
-        else:
-            self.gamma_base = nn.Parameter(torch.ones((1)), requires_grad=True)
-        self.color_base = nn.Parameter(torch.eye((3)), requires_grad=True)  # basic color matrix
-        # main blocks
-        self.conv_large = conv_embedding(in_channels, out_channels)
-        self.generator = query_SABlock(dim=out_channels, num_heads=num_heads)
-        self.gamma_linear = nn.Linear(out_channels, 1)
-        self.color_linear = nn.Linear(out_channels, 1)
-
-        self.apply(self._init_weights)
-
-        for name, p in self.named_parameters():
-            if name == 'generator.attn.v.weight':
-                nn.init.constant_(p, 0)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-
-    def forward(self, x):
-        # print(self.gamma_base)
-        x = self.conv_large(x)
-        x = self.generator(x)
-        gamma, color = x[:, 0].unsqueeze(1), x[:, 1:]
-        gamma = self.gamma_linear(gamma).squeeze(-1) + self.gamma_base
-        # print(self.gamma_base, self.gamma_linear(gamma))
-        color = self.color_linear(color).squeeze(-1).view(-1, 3, 3) + self.color_base
-        return gamma, color
 
 
 class DHAN(nn.Module):
@@ -672,8 +633,172 @@ class OverlapPatchEmbed(nn.Module):
         return x
 
 
+class LayerNormFunction(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, x, weight, bias, eps):
+        ctx.eps = eps
+        N, C, H, W = x.size()
+        mu = x.mean(1, keepdim=True)
+        var = (x - mu).pow(2).mean(1, keepdim=True)
+        y = (x - mu) / (var + eps).sqrt()
+        ctx.save_for_backward(y, var, weight)
+        y = weight.view(1, C, 1, 1) * y + bias.view(1, C, 1, 1)
+        return y
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        eps = ctx.eps
+
+        N, C, H, W = grad_output.size()
+        y, var, weight = ctx.saved_variables
+        g = grad_output * weight.view(1, C, 1, 1)
+        mean_g = g.mean(dim=1, keepdim=True)
+
+        mean_gy = (g * y).mean(dim=1, keepdim=True)
+        gx = 1. / torch.sqrt(var + eps) * (g - y * mean_gy - mean_g)
+        return gx, (grad_output * y).sum(dim=3).sum(dim=2).sum(dim=0), grad_output.sum(dim=3).sum(dim=2).sum(
+            dim=0), None
+
+
+class LayerNorm2d(nn.Module):
+
+    def __init__(self, channels, eps=1e-6):
+        super(LayerNorm2d, self).__init__()
+        self.register_parameter('weight', nn.Parameter(torch.ones(channels)))
+        self.register_parameter('bias', nn.Parameter(torch.zeros(channels)))
+        self.eps = eps
+
+    def forward(self, x):
+        return LayerNormFunction.apply(x, self.weight, self.bias, self.eps)
+
+
+class SimpleGate(nn.Module):
+    def forward(self, x):
+        x1, x2 = x.chunk(2, dim=1)
+        return x1 * x2
+
+
+class NAFBlock(nn.Module):
+    def __init__(self, c=3, DW_Expand=2, FFN_Expand=2, drop_out_rate=0.):
+        super().__init__()
+        dw_channel = c * DW_Expand
+        self.conv1 = nn.Conv2d(in_channels=c, out_channels=dw_channel, kernel_size=1, padding=0, stride=1, groups=1,
+                               bias=True)
+        self.conv2 = nn.Conv2d(in_channels=dw_channel, out_channels=dw_channel, kernel_size=3, padding=1, stride=1,
+                               groups=dw_channel,
+                               bias=True)
+        self.conv3 = nn.Conv2d(in_channels=dw_channel // 2, out_channels=c, kernel_size=1, padding=0, stride=1,
+                               groups=1, bias=True)
+
+        # Simplified Channel Attention
+        self.sca = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(in_channels=dw_channel // 2, out_channels=dw_channel // 2, kernel_size=1, padding=0, stride=1,
+                      groups=1, bias=True),
+        )
+
+        # SimpleGate
+        self.sg = SimpleGate()
+
+        ffn_channel = FFN_Expand * c
+        self.conv4 = nn.Conv2d(in_channels=c, out_channels=ffn_channel, kernel_size=1, padding=0, stride=1, groups=1,
+                               bias=True)
+        self.conv5 = nn.Conv2d(in_channels=ffn_channel // 2, out_channels=c, kernel_size=1, padding=0, stride=1,
+                               groups=1, bias=True)
+
+        self.norm1 = LayerNorm2d(c)
+        self.norm2 = LayerNorm2d(c)
+
+        self.dropout1 = nn.Dropout(drop_out_rate) if drop_out_rate > 0. else nn.Identity()
+        self.dropout2 = nn.Dropout(drop_out_rate) if drop_out_rate > 0. else nn.Identity()
+
+        self.beta = nn.Parameter(torch.zeros((1, c, 1, 1)), requires_grad=True)
+        self.gamma = nn.Parameter(torch.zeros((1, c, 1, 1)), requires_grad=True)
+
+    def forward(self, inp):
+        x = inp
+
+        x = self.norm1(x)
+
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.sg(x)
+        x = x * self.sca(x)
+        x = self.conv3(x)
+
+        x = self.dropout1(x)
+
+        y = inp + x * self.beta
+
+        x = self.conv4(self.norm2(y))
+        x = self.sg(x)
+        x = self.conv5(x)
+
+        x = self.dropout2(x)
+
+        return y + x * self.gamma
+
+
+class GlobalNet(nn.Module):
+    def __init__(self):
+        super(GlobalNet, self).__init__()
+        self.naf = nn.Sequential(*[NAFBlock() for _ in range(28)])
+        self.transformer = nn.Sequential(*[
+            TransformerBlock(dim=int(3), num_heads=1, ffn_expansion_factor=2.66,
+                             bias=False, LayerNorm_type='WithBias') for _ in range(4)])
+
+    def forward(self, inp):
+        res = self.naf(inp)
+        res = self.transformer(res)
+        return res
+
+
+class LocalNet(nn.Module):
+    def __init__(self, in_dim=3, dim=16):
+        super(LocalNet, self).__init__()
+        # initial convolution
+        self.conv1 = nn.Conv2d(in_dim, dim, 3, padding=1, groups=1)
+        self.relu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
+        # main blocks
+        blocks1 = [CBlock_ln(16, drop_path=0.01), CBlock_ln(16, drop_path=0.05), CBlock_ln(16, drop_path=0.1),
+                   nn.Conv2d(dim, 3, 3, 1, 1), nn.ReLU()]
+
+        self.branch1 = nn.Sequential(*blocks1)
+        self.branch2 = DHAN()
+
+        self.conv_fuss = nn.Conv2d(int(in_dim * 2), in_dim, kernel_size=1, bias=False)
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.Conv2d):
+            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+            fan_out //= m.groups
+            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
+            if m.bias is not None:
+                m.bias.data.zero_()
+
+    def forward(self, inp):
+        # short cut connection
+        branch1 = self.branch1(self.relu(self.conv1(inp)))
+
+        branch2 = self.branch2(inp)
+
+        res = self.conv_fuss(torch.cat((branch1, branch2), dim=1))
+
+        return res
+
+
 if __name__ == '__main__':
-    model = DHAN().cuda()
+    model = GlobalNet().cuda()
     t = torch.randn(1, 3, 256, 256).cuda()
     out1 = model(t)
     print(out1.shape)
