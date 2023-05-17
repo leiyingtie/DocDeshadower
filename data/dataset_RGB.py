@@ -31,7 +31,8 @@ class DataLoaderTrain(Dataset):
             # A.Resize(height=img_options['h'], width=img_options['w']),
             A.HorizontalFlip(p=0.3),
             A.VerticalFlip(p=0.3),
-            A.RandomRotate90(p=0.3), ],
+            A.RandomRotate90(p=0.3),
+            A.ColorJitter(p=0.3)],
             additional_targets={
                 'target': 'image',
             }

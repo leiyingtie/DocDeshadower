@@ -22,21 +22,7 @@ class LocalNet(nn.Module):
         self.branch1 = nn.Sequential(*blocks1)
         self.branch2 = DHAN()
 
-        self.conv_fuss1 = nn.Conv2d(int(in_dim * 2), in_dim, kernel_size=1, bias=False)
-
-        self.trans1 = nn.Sequential(*[
-            TransformerBlock(dim=in_dim, num_heads=1, ffn_expansion_factor=2.66, bias=False,
-                             LayerNorm_type='WithBias') for _ in range(1)])
-
-        self.trans2 = nn.Sequential(*[
-            TransformerBlock(dim=int(in_dim), num_heads=1, ffn_expansion_factor=2.66, bias=False,
-                             LayerNorm_type='WithBias') for _ in range(1)])
-
-        self.trans3 = nn.Sequential(*[
-            TransformerBlock(dim=int(in_dim), num_heads=1, ffn_expansion_factor=2.66, bias=False,
-                             LayerNorm_type='WithBias') for _ in range(1)])
-
-        self.conv_fuss2 = nn.Conv2d(int(in_dim * 3), in_dim, kernel_size=1, bias=False)
+        self.conv_fuss = nn.Conv2d(int(in_dim * 2), in_dim, kernel_size=1, bias=False)
 
         self.apply(self._init_weights)
 
@@ -61,13 +47,7 @@ class LocalNet(nn.Module):
 
         branch2 = self.branch2(inp)
 
-        res = self.conv_fuss1(torch.cat((branch1, branch2), dim=1))
-
-        trans_out_1 = self.trans1(res)
-        trans_out_2 = self.trans2(trans_out_1)
-        trans_out_3 = self.trans3(trans_out_2)
-
-        res = self.conv_fuss2(torch.cat((trans_out_1, trans_out_2, trans_out_3), dim=1))
+        res = self.conv_fuss(torch.cat((branch1, branch2), dim=1))
 
         return res
 
