@@ -9,9 +9,9 @@ import torch.nn.functional as F
 
 
 # Short Cut Connection on Final Layer
-class Local_pred_S(nn.Module):
+class LocalNet(nn.Module):
     def __init__(self, in_dim=3, dim=16):
-        super(Local_pred_S, self).__init__()
+        super(LocalNet, self).__init__()
         # initial convolution
         self.conv1 = nn.Conv2d(in_dim, dim, 3, padding=1, groups=1)
         self.relu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
@@ -24,22 +24,19 @@ class Local_pred_S(nn.Module):
 
         self.conv_fuss1 = nn.Conv2d(int(in_dim * 2), in_dim, kernel_size=1, bias=False)
 
-        self.patch_embed = OverlapPatchEmbed(in_dim, dim)
-
-        self.encoder_1 = nn.Sequential(*[
-            TransformerBlock(dim=dim, num_heads=1, ffn_expansion_factor=2.66, bias=False,
+        self.trans1 = nn.Sequential(*[
+            TransformerBlock(dim=in_dim, num_heads=1, ffn_expansion_factor=2.66, bias=False,
                              LayerNorm_type='WithBias') for _ in range(1)])
 
-        self.encoder_2 = nn.Sequential(*[
-            TransformerBlock(dim=int(dim), num_heads=1, ffn_expansion_factor=2.66, bias=False,
+        self.trans2 = nn.Sequential(*[
+            TransformerBlock(dim=int(in_dim), num_heads=1, ffn_expansion_factor=2.66, bias=False,
                              LayerNorm_type='WithBias') for _ in range(1)])
 
-        self.encoder_3 = nn.Sequential(*[
-            TransformerBlock(dim=int(dim), num_heads=1, ffn_expansion_factor=2.66, bias=False,
+        self.trans3 = nn.Sequential(*[
+            TransformerBlock(dim=int(in_dim), num_heads=1, ffn_expansion_factor=2.66, bias=False,
                              LayerNorm_type='WithBias') for _ in range(1)])
 
-        self.layer_fussion = LAM_Module_v2(in_dim=int(dim * 3))
-        self.conv_fuss2 = nn.Conv2d(int(dim * 3), in_dim, kernel_size=1, bias=False)
+        self.conv_fuss2 = nn.Conv2d(int(in_dim * 3), in_dim, kernel_size=1, bias=False)
 
         self.apply(self._init_weights)
 
@@ -66,16 +63,11 @@ class Local_pred_S(nn.Module):
 
         res = self.conv_fuss1(torch.cat((branch1, branch2), dim=1))
 
-        enc_out = self.patch_embed(res)
+        trans_out_1 = self.trans1(res)
+        trans_out_2 = self.trans2(trans_out_1)
+        trans_out_3 = self.trans3(trans_out_2)
 
-        enc_out_1 = self.encoder_1(enc_out)
-        enc_out_2 = self.encoder_2(enc_out_1)
-        enc_out_3 = self.encoder_3(enc_out_2)
-
-        res = self.layer_fussion(torch.cat(
-            [enc_out_1.unsqueeze(1), enc_out_2.unsqueeze(1), enc_out_3.unsqueeze(1)], dim=1))
-
-        res = self.conv_fuss2(res)
+        res = self.conv_fuss2(torch.cat((trans_out_1, trans_out_2, trans_out_3), dim=1))
 
         return res
 
@@ -83,7 +75,7 @@ class Local_pred_S(nn.Module):
 class Model(nn.Module):
     def __init__(self, in_dim=3, depth=2):
         super(Model, self).__init__()
-        self.local_net = Local_pred_S(in_dim=in_dim)
+        self.local_net = LocalNet(in_dim=in_dim)
         self.depth = depth
 
     def laplacian_pyramid_decomposition(self, img, depth):
