@@ -5,7 +5,6 @@ from timm.models.layers import trunc_normal_
 from torch import nn
 
 from models.blocks import CBlock_ln, Global_pred, DHAN, LAM_Module_v2, OverlapPatchEmbed, TransformerBlock
-from models.lut import LUTNet
 import torch.nn.functional as F
 
 
@@ -86,7 +85,6 @@ class Model(nn.Module):
         super(Model, self).__init__()
         self.local_net = Local_pred_S(in_dim=in_dim)
         self.depth = depth
-        self.lut_arr = nn.ModuleList([LUTNet() for _ in range(depth)])
 
     def laplacian_pyramid_decomposition(self, img, depth):
         current = img
@@ -105,7 +103,6 @@ class Model(nn.Module):
         for i in reversed(range(len(pyramid) - 1)):
             expanded = F.interpolate(current, pyramid[i].shape[2:], mode='bilinear', align_corners=False)
             current = expanded + pyramid[i]
-            current = self.lut_arr[i](current)
         return current
 
     def forward(self, inp):
