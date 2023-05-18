@@ -84,8 +84,8 @@ class DataLoaderTrain(Dataset):
             y0 = int(np.round(max(cy - h / 2, 0)))
             y1 = int(np.round(min(cy + h / 2, img_h)))
 
-            inp_img[:, :, y0:y1, x0:x1] = mixup_inp_img[:, :, y0:y1, x0:x1]
-            tar_img[:, :, y0:y1, x0:x1] = mixup_tar_img[:, :, y0:y1, x0:x1]
+            inp_img[:, y0:y1, x0:x1] = mixup_inp_img[:, y0:y1, x0:x1]
+            tar_img[:, y0:y1, x0:x1] = mixup_tar_img[:, y0:y1, x0:x1]
 
         return inp_img, tar_img
 
