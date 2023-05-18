@@ -33,7 +33,7 @@ class DataLoaderTrain(Dataset):
             A.ColorJitter(p=0.3),
             A.Affine(p=0.3),
             A.RandomResizedCrop(height=img_options['h'], width=img_options['w']),
-            ],
+        ],
             additional_targets={
                 'target': 'image',
             }
@@ -45,6 +45,49 @@ class DataLoaderTrain(Dataset):
 
     def __len__(self):
         return self.sizex
+
+    def mixup(self, inp_img, tar_img, mode='mixup'):
+        mixup_index_ = random.randint(0, self.sizex - 1)
+
+        mixup_inp_path = self.inp_filenames[mixup_index_]
+        mixup_tar_path = self.tar_filenames[mixup_index_]
+
+        mixup_inp_img = Image.open(mixup_inp_path).convert('RGB')
+        mixup_tar_img = Image.open(mixup_tar_path).convert('RGB')
+
+        mixup_inp_img = np.array(mixup_inp_img)
+        mixup_tar_img = np.array(mixup_tar_img)
+
+        transformed = self.transform(image=mixup_inp_img, target=mixup_tar_img)
+        shadowed = self.shadow(image=transformed['image'])
+
+        alpha = 0.2
+        lam = np.random.beta(alpha, alpha)
+
+        mixup_inp_img = F.to_tensor(shadowed['image'])
+        mixup_tar_img = F.to_tensor(transformed['target'])
+
+        if mode == 'mixup':
+            inp_img = lam * inp_img + (1 - lam) * mixup_inp_img
+            tar_img = lam * tar_img + (1 - lam) * mixup_tar_img
+        elif mode == 'cutmix':
+            img_h, img_w = self.img_options['h'], self.img_options['w']
+
+            cx = np.random.uniform(0, img_w)
+            cy = np.random.uniform(0, img_h)
+
+            w = img_w * np.sqrt(1 - lam)
+            h = img_h * np.sqrt(1 - lam)
+
+            x0 = int(np.round(max(cx - w / 2, 0)))
+            x1 = int(np.round(min(cx + w / 2, img_w)))
+            y0 = int(np.round(max(cy - h / 2, 0)))
+            y1 = int(np.round(min(cy + h / 2, img_h)))
+
+            inp_img[:, :, y0:y1, x0:x1] = mixup_inp_img[:, :, y0:y1, x0:x1]
+            tar_img[:, :, y0:y1, x0:x1] = mixup_tar_img[:, :, y0:y1, x0:x1]
+
+        return inp_img, tar_img
 
     def __getitem__(self, index):
         index_ = index % self.sizex
@@ -64,29 +107,11 @@ class DataLoaderTrain(Dataset):
         inp_img = F.to_tensor(shadowed['image'])
         tar_img = F.to_tensor(transformed['target'])
 
-        if index_ > 0 and index_ % 5 == 0:
-            mixup_index_ = random.randint(0, self.sizex - 1)
-
-            mixup_inp_path = self.inp_filenames[mixup_index_]
-            mixup_tar_path = self.tar_filenames[mixup_index_]
-
-            mixup_inp_img = Image.open(mixup_inp_path).convert('RGB')
-            mixup_tar_img = Image.open(mixup_tar_path).convert('RGB')
-
-            mixup_inp_img = np.array(mixup_inp_img)
-            mixup_tar_img = np.array(mixup_tar_img)
-
-            transformed = self.transform(image=mixup_inp_img, target=mixup_tar_img)
-            shadowed = self.shadow(image=transformed['image'])
-
-            alpha = 0.2
-            lam = np.random.beta(alpha, alpha)
-
-            mixup_inp_img = F.to_tensor(shadowed['image'])
-            mixup_tar_img = F.to_tensor(transformed['target'])
-
-            inp_img = lam * inp_img + (1 - lam) * mixup_inp_img
-            tar_img = lam * tar_img + (1 - lam) * mixup_tar_img
+        if index_ > 0 and index_ % 3 == 0:
+            if random.random() > 0.5:
+                inp_img, tar_img = self.mixup(inp_img, tar_img, mode='mixup')
+            else:
+                inp_img, tar_img = self.mixup(inp_img, tar_img, mode='cutmix')
 
         filename = os.path.splitext(os.path.split(tar_path)[-1])[0]
 
