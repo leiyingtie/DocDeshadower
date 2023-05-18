@@ -758,7 +758,7 @@ class GlobalNet(nn.Module):
     def __init__(self):
         super(GlobalNet, self).__init__()
 
-        dim = 64
+        dim = 32
 
         pre = [nn.Conv2d(3, 16, 3, padding=1),
                nn.InstanceNorm2d(16),
@@ -771,10 +771,10 @@ class GlobalNet(nn.Module):
 
         self.pre = nn.Sequential(*pre)
 
-        self.naf = nn.Sequential(*[NAFBlock(c=dim) for _ in range(4)])
+        self.naf = nn.Sequential(*[NAFBlock(c=dim) for _ in range(3)])
         self.transformer = nn.Sequential(*[
             TransformerBlock(dim=int(dim), num_heads=1, ffn_expansion_factor=2.66,
-                             bias=False, LayerNorm_type='WithBias') for _ in range(4)])
+                             bias=False, LayerNorm_type='WithBias') for _ in range(3)])
 
         pos = [nn.Conv2d(dim * 2, 16, 3, padding=1),
                nn.LeakyReLU(),
