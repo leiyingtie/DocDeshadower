@@ -758,32 +758,35 @@ class GlobalNet(nn.Module):
     def __init__(self):
         super(GlobalNet, self).__init__()
 
+        dim = 3
+
         pre = [nn.Conv2d(3, 16, 3, padding=1),
                nn.InstanceNorm2d(16),
                nn.LeakyReLU(),
-               nn.Conv2d(16, 64, 3, padding=1),
+               nn.Conv2d(16, dim, 3, padding=1),
                nn.LeakyReLU()]
 
         for _ in range(5):
-            pre += [ResidualBlock(64)]
+            pre += [ResidualBlock(dim)]
 
         self.pre = nn.Sequential(*pre)
 
-        self.naf = nn.Sequential(*[NAFBlock(c=64) for _ in range(3)])
+        self.naf = nn.Sequential(*[NAFBlock(c=dim) for _ in range(3)])
         self.transformer = nn.Sequential(*[
-            TransformerBlock(dim=int(64), num_heads=1, ffn_expansion_factor=2.66,
-                             bias=False, LayerNorm_type='WithBias') for _ in range(3)])
+            TransformerBlock(dim=int(dim), num_heads=1, ffn_expansion_factor=2.66,
+                             bias=False, LayerNorm_type='WithBias') for _ in range(1)])
 
-        pos = [nn.Conv2d(64, 16, 3, padding=1),
+        pos = [nn.Conv2d(dim, 16, 3, padding=1),
                nn.LeakyReLU(),
                nn.Conv2d(16, 3, 3, padding=1)]
         self.pos = nn.Sequential(*pos)
 
     def forward(self, inp):
-        res = self.pre(inp)
+        res = inp + self.pre(inp)
         res = self.naf(res)
         res = self.transformer(res)
         res = self.pos(res)
+        res = torch.tanh(res)
         return res
 
 
