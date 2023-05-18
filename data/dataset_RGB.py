@@ -5,6 +5,7 @@ import numpy as np
 import torchvision.transforms.functional as F
 from PIL import Image
 from torch.utils.data import Dataset
+import random
 
 
 def is_image_file(filename):
@@ -27,12 +28,12 @@ class DataLoaderTrain(Dataset):
         self.sizex = len(self.tar_filenames)  # get the size of target
 
         self.transform = A.Compose([
-            A.RandomResizedCrop(height=img_options['h'], width=img_options['w']),
-            # A.Resize(height=img_options['h'], width=img_options['w']),
-            A.HorizontalFlip(p=0.3),
-            A.VerticalFlip(p=0.3),
+            A.Flip(p=0.3),
             A.RandomRotate90(p=0.3),
-            A.ColorJitter(p=0.3)],
+            A.ColorJitter(p=0.3),
+            A.Affine(p=0.3),
+            A.RandomResizedCrop(height=img_options['h'], width=img_options['w']),
+            ],
             additional_targets={
                 'target': 'image',
             }
@@ -62,6 +63,30 @@ class DataLoaderTrain(Dataset):
 
         inp_img = F.to_tensor(shadowed['image'])
         tar_img = F.to_tensor(transformed['target'])
+
+        if index_ > 0 and index_ % 5 == 0:
+            mixup_index_ = random.randint(0, self.sizex - 1)
+
+            mixup_inp_path = self.inp_filenames[mixup_index_]
+            mixup_tar_path = self.tar_filenames[mixup_index_]
+
+            mixup_inp_img = Image.open(mixup_inp_path).convert('RGB')
+            mixup_tar_img = Image.open(mixup_tar_path).convert('RGB')
+
+            mixup_inp_img = np.array(mixup_inp_img)
+            mixup_tar_img = np.array(mixup_tar_img)
+
+            transformed = self.transform(image=mixup_inp_img, target=mixup_tar_img)
+            shadowed = self.shadow(image=transformed['image'])
+
+            alpha = 0.2
+            lam = np.random.beta(alpha, alpha)
+
+            mixup_inp_img = F.to_tensor(shadowed['image'])
+            mixup_tar_img = F.to_tensor(transformed['target'])
+
+            inp_img = lam * inp_img + (1 - lam) * mixup_inp_img
+            tar_img = lam * tar_img + (1 - lam) * mixup_tar_img
 
         filename = os.path.splitext(os.path.split(tar_path)[-1])[0]
 
