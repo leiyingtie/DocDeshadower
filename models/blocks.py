@@ -680,7 +680,7 @@ class SimpleGate(nn.Module):
 
 
 class NAFBlock(nn.Module):
-    def __init__(self, c=3, DW_Expand=2, FFN_Expand=2, drop_out_rate=0.):
+    def __init__(self, c=48, DW_Expand=2, FFN_Expand=2, drop_out_rate=0.):
         super().__init__()
         dw_channel = c * DW_Expand
         self.conv1 = nn.Conv2d(in_channels=c, out_channels=dw_channel, kernel_size=1, padding=0, stride=1, groups=1,
@@ -740,17 +740,50 @@ class NAFBlock(nn.Module):
         return y + x * self.gamma
 
 
+class ResidualBlock(nn.Module):
+    def __init__(self, in_features):
+        super(ResidualBlock, self).__init__()
+
+        self.block = nn.Sequential(
+            nn.Conv2d(in_features, in_features, 3, padding=1),
+            nn.LeakyReLU(),
+            nn.Conv2d(in_features, in_features, 3, padding=1),
+        )
+
+    def forward(self, x):
+        return x + self.block(x)
+
+
 class GlobalNet(nn.Module):
     def __init__(self):
         super(GlobalNet, self).__init__()
-        self.naf = nn.Sequential(*[NAFBlock() for _ in range(28)])
+
+        pre = [nn.Conv2d(3, 16, 3, padding=1),
+               nn.InstanceNorm2d(16),
+               nn.LeakyReLU(),
+               nn.Conv2d(16, 64, 3, padding=1),
+               nn.LeakyReLU()]
+
+        for _ in range(5):
+            pre += [ResidualBlock(64)]
+
+        self.pre = nn.Sequential(*pre)
+
+        self.naf = nn.Sequential(*[NAFBlock(c=64) for _ in range(3)])
         self.transformer = nn.Sequential(*[
-            TransformerBlock(dim=int(3), num_heads=1, ffn_expansion_factor=2.66,
-                             bias=False, LayerNorm_type='WithBias') for _ in range(4)])
+            TransformerBlock(dim=int(64), num_heads=1, ffn_expansion_factor=2.66,
+                             bias=False, LayerNorm_type='WithBias') for _ in range(3)])
+
+        pos = [nn.Conv2d(64, 16, 3, padding=1),
+               nn.LeakyReLU(),
+               nn.Conv2d(16, 3, 3, padding=1)]
+        self.pos = nn.Sequential(*pos)
 
     def forward(self, inp):
-        res = self.naf(inp)
+        res = self.pre(inp)
+        res = self.naf(res)
         res = self.transformer(res)
+        res = self.pos(res)
         return res
 
 
