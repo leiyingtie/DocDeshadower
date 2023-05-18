@@ -776,17 +776,16 @@ class GlobalNet(nn.Module):
             TransformerBlock(dim=int(dim), num_heads=1, ffn_expansion_factor=2.66,
                              bias=False, LayerNorm_type='WithBias') for _ in range(1)])
 
-        pos = [nn.Conv2d(dim, 16, 3, padding=1),
+        pos = [nn.Conv2d(dim * 2, 16, 3, padding=1),
                nn.LeakyReLU(),
                nn.Conv2d(16, 3, 3, padding=1)]
         self.pos = nn.Sequential(*pos)
 
     def forward(self, inp):
-        res = inp + self.pre(inp)
-        res = self.naf(res)
-        res = self.transformer(res)
-        res = self.pos(res)
-        res = torch.tanh(res)
+        inter = self.pre(inp)
+        res_1 = self.naf(inter)
+        res_2 = self.transformer(inter)
+        res = self.pos(torch.cat((res_1, res_2), dim=1))
         return res
 
 
