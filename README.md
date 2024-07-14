@@ -8,21 +8,24 @@
     Yingtie Lei<sup> 👨‍💻‍ </sup>
   </span>,
   <span class="author-block">
-    Ivanova Tatiana
+    Xuhang Chen<sup>📮</sup>
   </span>,
   <span class="author-block">
     Shenghong Luo
   </span>,
   <span class="author-block">
-    Chi-Man Pun
+    Wenjun Zhang
   </span>,
   <span class="author-block">
-  Zhen Wang<sup>📮</sup>
+    Chi-Man Pun<sup>📮</sup>
+  </span>,
+  <span class="author-block">
+  Zhen Wang
 </span>
   (👨‍💻‍ Equal contributions, 📮 Corresponding Author)
   </div>
 
-<b>Huizhou University, University of Macau, Kazan Federal University</b>
+<b>Huizhou University, University of Macau, Tp-Link International Shenzhen Co.,Ltd.</b>
 
 In <b>_IEEE International Conference on Systems, Man, and Cybernetics 2024 (SMC 2024)_<b>
 
