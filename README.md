@@ -52,7 +52,7 @@ python test.py
 ```
 
 # 💗 Acknowledgements
-This work was supported in part by the Science and Technology Development Fund, Macau SAR, under Grant 0141/2023/RIA2 and	0193/2023/RIA3, in part by the Huizhou Daya Bay Science and Technology Planning Project under Grant No.2020020003.
+This work was supported by the Science and Technology Development Fund, Macau SAR, under Grant 0141/2023/RIA2 and 0193/2023/RIA3.
 
 ### 🛎 Citation
 If you find our work helpful for your research, please cite:
